@@ -1,0 +1,19 @@
+# fly.toml app configuration file generated for tgaibot-holy-haze-5469 on 2025-03-28T17:16:17+01:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = "tgaibot-holy-haze-5469"
+primary_region = "ams"
+
+[processes]
+  app = "python bot.py"
+
+[env]
+  TELEGRAM_BOT_TOKEN = "will_be_overridden"
+  OPENAI_API_KEY = "will_be_overridden"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1

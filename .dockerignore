@@ -1,0 +1,33 @@
+# flyctl launch added from .idea/.gitignore
+# Default ignored files
+.idea
+fly.toml
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Byte-compiled / compiled files
+*.so
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# OS / IDE files
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Git
+.git
+.gitignore
+
+# Fly.io build cache (if any)
+fly.toml
