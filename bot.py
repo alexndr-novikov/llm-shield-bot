@@ -46,11 +46,19 @@ EXAMPLE_SPAM = [
 def build_prompt(message_text: str) -> str:
     examples = "\n".join(f"- {ex}" for ex in EXAMPLE_SPAM)
     return (
-        f"You are a spam detection bot. Based on the following known examples of spam:\n"
+        f"You are a Telegram group moderation bot trained to detect and filter spam messages.\n"
+        f"The following messages are real examples of spam banned from the group:\n"
         f"{examples}\n\n"
-        f"And taking into account any message with more than 12 emojis is always spam - \n"
-        f"Determine if the following message is spam:\n\"{message_text}\"\n\n"
-        f"Reply with YES if it's spam, otherwise NO."
+        f"Spam in this group typically includes messages with one or more of the following traits:\n"
+        f"- Promises of high income with little to no effort\n"
+        f"- Vague job offers or business opportunities\n"
+        f"- Encouragement to message privately (e.g., 'пишите в лс', 'пиши в личные сообщения')\n"
+        f"- References to cryptocurrency or earnings in USD/RUB\n"
+        f"- Excessive use of emojis or exclamation marks\n"
+        f"- Artificial urgency (e.g., 'только сегодня', 'осталось 2 места')\n"
+        f"- More than 12 emojis is *always* spam\n\n"
+        f"Determine whether the following message is spam:\n\"{message_text}\"\n\n"
+        f"Reply with a single word: YES if it is spam, or NO if it is not."
     )
 
 async def call_chatgpt(prompt: str) -> str:
