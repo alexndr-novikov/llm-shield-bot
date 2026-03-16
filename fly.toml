@@ -9,9 +9,6 @@ primary_region = "ams"
 [processes]
   app = "python bot.py"
 
-[env]
-  TELEGRAM_BOT_TOKEN = "will_be_overridden"
-  OPENAI_API_KEY = "will_be_overridden"
 
 [[vm]]
   memory = "512mb"

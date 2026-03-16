@@ -46,12 +46,62 @@ EXAMPLE_SPAM = [
     "Всем привет! Для тех, кто хочет зарабатывать дополнительно, есть возможность получить от 200 долларов в день. Пишите в личку, если заинтересованы!",
     "Нужны сотрудники на производство упаковки. Оплата от 18 000 рублей, в неделю",
     "Есть темка на 5.000, надо выйти на улицу кое-что сделать",
-    "Извините что не в тему, помогите поменять дома лампочки , еще и накормлю , заплачу 3000р"
+    "Извините что не в тему, помогите поменять дома лампочки , еще и накормлю , заплачу 3000р",
+    "Пользуйтесь нашим новым VPN абсолютно бесплатно",
+    "Спасибо!! [ссылка на VPN/прокси сервис]",
+    "Помогло, спасибо большое! [ссылка на VPN/прокси сервис]",
+    "🔥 ПОЧТИ 4 ЛЯМА ЗАЛЕТЕЛО, КРУТЬ!😎 ИГРАЮ👉 coinik.is-best.net",
 ]
 
 # --- Core Functionalities ---
-def build_prompt(message_text: str) -> str:
+def extract_message_context(msg) -> dict:
+    """Extract all relevant context from a message for spam analysis."""
+    text = msg.text or msg.caption or ""
+    urls = []
+    if msg.entities:
+        for ent in msg.entities:
+            if ent.type in ("url", "text_link"):
+                if ent.type == "text_link":
+                    urls.append(ent.url)
+                else:
+                    urls.append(text[ent.offset:ent.offset + ent.length])
+    if msg.caption_entities:
+        for ent in msg.caption_entities:
+            if ent.type in ("url", "text_link"):
+                if ent.type == "text_link":
+                    urls.append(ent.url)
+                else:
+                    urls.append((msg.caption or "")[ent.offset:ent.offset + ent.length])
+
+    is_forwarded = msg.forward_origin is not None
+    forward_info = ""
+    if is_forwarded and hasattr(msg.forward_origin, 'chat'):
+        forward_info = f"forwarded from channel: {msg.forward_origin.chat.title or msg.forward_origin.chat.username or 'unknown'}"
+    elif is_forwarded and hasattr(msg.forward_origin, 'sender_user_name'):
+        forward_info = f"forwarded from user: {msg.forward_origin.sender_user_name}"
+
+    return {
+        "text": text,
+        "urls": urls,
+        "is_forwarded": is_forwarded,
+        "forward_info": forward_info,
+        "has_link_preview": msg.link_preview_options is not None if hasattr(msg, 'link_preview_options') else False,
+    }
+
+
+def build_prompt(message_text: str, context: dict = None) -> str:
     examples = "\n".join(f"- {ex}" for ex in EXAMPLE_SPAM)
+
+    context_section = ""
+    if context:
+        parts = []
+        if context.get("urls"):
+            parts.append(f"URLs in message: {', '.join(context['urls'])}")
+        if context.get("is_forwarded"):
+            parts.append(f"Message is {context.get('forward_info', 'forwarded from another source')}")
+        if parts:
+            context_section = f"\nAdditional context about this message:\n" + "\n".join(f"- {p}" for p in parts) + "\n"
+
     return (
         f"You are a Telegram group moderation bot trained to detect and filter spam messages.\n"
         f"The following messages are real examples of spam banned from the group:\n"
@@ -63,7 +113,13 @@ def build_prompt(message_text: str) -> str:
         f"- References to cryptocurrency or earnings in USD/RUB\n"
         f"- Excessive use of emojis or exclamation marks\n"
         f"- Artificial urgency (e.g., 'только сегодня', 'осталось 2 места')\n"
-        f"- More than 12 emojis is *always* spam\n\n"
+        f"- More than 12 emojis is *always* spam\n"
+        f"- Short innocent-looking messages (e.g., 'Спасибо!!', 'Помогло!') that contain promotional links or link previews to VPN, proxy, or other services\n"
+        f"- VPN, proxy, or free service promotions\n"
+        f"- Casino, gambling, or betting promotions (e.g., fake winnings screenshots, links to gambling sites)\n"
+        f"- Forwarded messages from unknown channels promoting products or services\n"
+        f"- Messages with URLs to suspicious or promotional domains\n\n"
+        f"{context_section}"
         f"Determine whether the following message is spam:\n\"{message_text}\"\n\n"
         f"Reply with a single word: YES if it is spam, or NO if it is not."
     )
@@ -119,6 +175,34 @@ def get_reaction_count(chat_id: int, message_id: int, emoji: str) -> int:
     key = (chat_id, message_id)
     return reaction_cache.get(key, {}).get(emoji, 0)
 
+async def handle_join_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Auto-delete the default 'user joined the group' service messages."""
+    msg = update.message
+    if not msg:
+        return
+    try:
+        await context.bot.delete_message(chat_id=msg.chat.id, message_id=msg.message_id)
+        logger.info(f"Deleted join message {msg.message_id} in chat {msg.chat.id}")
+    except Exception as e:
+        logger.error(f"Failed to delete join message: {e}")
+
+def is_suspicious_message(msg) -> bool:
+    """Check if a message should be proactively scanned for spam."""
+    # Forwarded from channels
+    if msg.forward_origin is not None:
+        return True
+    # Message contains URLs
+    if msg.entities:
+        for ent in msg.entities:
+            if ent.type in ("url", "text_link"):
+                return True
+    if msg.caption_entities:
+        for ent in msg.caption_entities:
+            if ent.type in ("url", "text_link"):
+                return True
+    return False
+
+
 async def handle_new_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not msg:
@@ -128,6 +212,23 @@ async def handle_new_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if len(message_cache) > MAX_CACHE_SIZE:
         message_cache.popitem(last=False)
+
+    # Proactive scan for suspicious messages (forwarded or containing links)
+    if is_suspicious_message(msg):
+        checked_message_ids.add(key)
+        msg_context = extract_message_context(msg)
+        prompt = build_prompt(msg_context["text"], msg_context)
+        result = await call_chatgpt(prompt)
+        logger.info(f"Proactive scan result for message {msg.message_id}: {result}")
+
+        if result.lower().startswith("yes"):
+            await handle_spam_action(
+                chat_id=msg.chat.id,
+                message_id=msg.message_id,
+                user_id=msg.from_user.id,
+                context=context,
+                ban_user=True,
+            )
 
 async def notify_admin_about_removal(chat_id: int, poop_count: int, context: ContextTypes.DEFAULT_TYPE):
     """Notify admin when message is removed by community but user not banned"""
@@ -216,7 +317,8 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning("Original message not found in cache.")
         return
 
-    prompt = build_prompt(original_message.text or original_message.caption or "")
+    msg_context = extract_message_context(original_message)
+    prompt = build_prompt(msg_context["text"], msg_context)
     result = await call_chatgpt(prompt)
     logger.info(f"GPT result: {result}")
 
@@ -234,7 +336,8 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(MessageHandler(filters.TEXT | filters.CAPTION, handle_new_message))
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_join_message))
+    app.add_handler(MessageHandler(filters.TEXT | filters.CAPTION | filters.FORWARDED, handle_new_message))
     app.add_handler(MessageReactionHandler(handle_reaction))
 
     logger.info("Bot is running...")
