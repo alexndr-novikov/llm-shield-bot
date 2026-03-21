@@ -289,6 +289,19 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"Message {reaction.message_id} now has {total_poop_count} 💩 reactions")
 
+    # Forwarded messages: ban immediately on first 💩 reaction
+    original_message = message_cache.get(key)
+    if original_message and original_message.forward_origin is not None:
+        logger.info(f"Forwarded message {reaction.message_id} got 💩 reaction — banning immediately")
+        await handle_spam_action(
+            chat_id=reaction.chat.id,
+            message_id=reaction.message_id,
+            user_id=original_message.from_user.id,
+            context=context,
+            ban_user=True,
+        )
+        return
+
     # Check if we've reached the threshold
     if total_poop_count >= 4:
         original_message = message_cache.get(key)
