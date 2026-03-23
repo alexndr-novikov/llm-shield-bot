@@ -298,8 +298,32 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"Message {reaction.message_id} now has {total_poop_count} 💩 reactions")
 
-    # Forwarded messages or short text + link: ban immediately on first 💩 reaction
+    # Debug: dump full message structure on first 💩 reaction
     original_message = message_cache.get(key)
+    if original_message and key not in checked_message_ids:
+        msg = original_message
+        logger.info(f"=== DEBUG MESSAGE DUMP for {reaction.message_id} ===")
+        logger.info(f"  text: {repr(msg.text)}")
+        logger.info(f"  caption: {repr(msg.caption)}")
+        logger.info(f"  from_user: id={msg.from_user.id}, username={msg.from_user.username}, first_name={msg.from_user.first_name}")
+        logger.info(f"  chat: id={msg.chat.id}, title={msg.chat.title}")
+        logger.info(f"  date: {msg.date}")
+        logger.info(f"  forward_origin: {msg.forward_origin}")
+        logger.info(f"  entities: {[(e.type, e.offset, e.length, e.url) for e in (msg.entities or [])]}")
+        logger.info(f"  caption_entities: {[(e.type, e.offset, e.length, e.url) for e in (msg.caption_entities or [])]}")
+        logger.info(f"  link_preview_options: {msg.link_preview_options if hasattr(msg, 'link_preview_options') else 'N/A'}")
+        logger.info(f"  photo: {bool(msg.photo)}")
+        logger.info(f"  video: {bool(msg.video)}")
+        logger.info(f"  document: {bool(msg.document)}")
+        logger.info(f"  sticker: {bool(msg.sticker)}")
+        logger.info(f"  reply_markup: {msg.reply_markup}")
+        logger.info(f"  has_urls(): {has_urls(msg)}")
+        logger.info(f"  is_short_text_with_link(): {is_short_text_with_link(msg)}")
+        logger.info(f"  forward_origin is not None: {msg.forward_origin is not None}")
+        logger.info(f"  full to_dict: {msg.to_dict()}")
+        logger.info(f"=== END DEBUG DUMP ===")
+
+    # Forwarded messages or short text + link: ban immediately on first 💩 reaction
     if original_message and (original_message.forward_origin is not None or is_short_text_with_link(original_message)):
         reason = "forwarded" if original_message.forward_origin else "short text + link"
         logger.info(f"Message {reaction.message_id} ({reason}) got 💩 reaction — banning immediately")
