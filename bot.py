@@ -199,6 +199,11 @@ def has_urls(msg) -> bool:
     return False
 
 
+def has_external_reply(msg) -> bool:
+    """Check if a message quotes/replies to content from another chat (e.g. channel post)."""
+    return getattr(msg, 'external_reply', None) is not None
+
+
 def is_short_text_with_link(msg) -> bool:
     """Detect spam pattern: short filler text + URL/link preview.
 
@@ -320,12 +325,14 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"  has_urls(): {has_urls(msg)}")
         logger.info(f"  is_short_text_with_link(): {is_short_text_with_link(msg)}")
         logger.info(f"  forward_origin is not None: {msg.forward_origin is not None}")
+        logger.info(f"  has_external_reply(): {has_external_reply(msg)}")
+        logger.info(f"  external_reply: {getattr(msg, 'external_reply', None)}")
         logger.info(f"  full to_dict: {msg.to_dict()}")
         logger.info(f"=== END DEBUG DUMP ===")
 
-    # Forwarded messages or short text + link: ban immediately on first 💩 reaction
-    if original_message and (original_message.forward_origin is not None or is_short_text_with_link(original_message)):
-        reason = "forwarded" if original_message.forward_origin else "short text + link"
+    # Forwarded, external reply (channel quote), or short text + link: ban immediately on first 💩
+    if original_message and (original_message.forward_origin is not None or has_external_reply(original_message) or is_short_text_with_link(original_message)):
+        reason = "forwarded" if original_message.forward_origin else ("external reply" if has_external_reply(original_message) else "short text + link")
         logger.info(f"Message {reaction.message_id} ({reason}) got 💩 reaction — banning immediately")
         await handle_spam_action(
             chat_id=reaction.chat.id,
