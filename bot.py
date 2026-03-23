@@ -238,35 +238,6 @@ async def handle_new_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if len(message_cache) > MAX_CACHE_SIZE:
         message_cache.popitem(last=False)
 
-    # Rule-based: short filler text + URL = instant ban (no LLM needed)
-    if is_short_text_with_link(msg):
-        logger.info(f"Short text + link detected in message {msg.message_id} — banning immediately")
-        checked_message_ids.add(key)
-        await handle_spam_action(
-            chat_id=msg.chat.id,
-            message_id=msg.message_id,
-            user_id=msg.from_user.id,
-            context=context,
-            ban_user=True,
-        )
-        return
-
-    # Proactive scan for suspicious messages (forwarded or containing links)
-    if is_suspicious_message(msg):
-        checked_message_ids.add(key)
-        msg_context = extract_message_context(msg)
-        prompt = build_prompt(msg_context["text"], msg_context)
-        result = await call_chatgpt(prompt)
-        logger.info(f"Proactive scan result for message {msg.message_id}: {result}")
-
-        if result.lower().startswith("yes"):
-            await handle_spam_action(
-                chat_id=msg.chat.id,
-                message_id=msg.message_id,
-                user_id=msg.from_user.id,
-                context=context,
-                ban_user=True,
-            )
 
 async def notify_admin_about_removal(chat_id: int, poop_count: int, context: ContextTypes.DEFAULT_TYPE):
     """Notify admin when message is removed by community but user not banned"""
@@ -327,10 +298,11 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"Message {reaction.message_id} now has {total_poop_count} 💩 reactions")
 
-    # Forwarded messages: ban immediately on first 💩 reaction
+    # Forwarded messages or short text + link: ban immediately on first 💩 reaction
     original_message = message_cache.get(key)
-    if original_message and original_message.forward_origin is not None:
-        logger.info(f"Forwarded message {reaction.message_id} got 💩 reaction — banning immediately")
+    if original_message and (original_message.forward_origin is not None or is_short_text_with_link(original_message)):
+        reason = "forwarded" if original_message.forward_origin else "short text + link"
+        logger.info(f"Message {reaction.message_id} ({reason}) got 💩 reaction — banning immediately")
         await handle_spam_action(
             chat_id=reaction.chat.id,
             message_id=reaction.message_id,
