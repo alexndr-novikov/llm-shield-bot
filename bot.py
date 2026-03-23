@@ -186,12 +186,8 @@ async def handle_join_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.error(f"Failed to delete join message: {e}")
 
-def is_suspicious_message(msg) -> bool:
-    """Check if a message should be proactively scanned for spam."""
-    # Forwarded from channels
-    if msg.forward_origin is not None:
-        return True
-    # Message contains URLs
+def has_urls(msg) -> bool:
+    """Check if a message contains any URLs."""
     if msg.entities:
         for ent in msg.entities:
             if ent.type in ("url", "text_link"):
@@ -200,6 +196,35 @@ def is_suspicious_message(msg) -> bool:
         for ent in msg.caption_entities:
             if ent.type in ("url", "text_link"):
                 return True
+    return False
+
+
+def is_short_text_with_link(msg) -> bool:
+    """Detect spam pattern: short filler text + URL/link preview.
+
+    Examples: 'Спасиб' + link preview, 'Хоороший!!' + link preview.
+    These are always spam — no LLM check needed.
+    """
+    text = msg.text or msg.caption or ""
+    if not has_urls(msg):
+        return False
+    # Strip URLs from text to get just the "filler" part
+    plain_text = text
+    for ent in (msg.entities or []):
+        if ent.type in ("url", "text_link"):
+            url_text = text[ent.offset:ent.offset + ent.length]
+            plain_text = plain_text.replace(url_text, "")
+    plain_text = plain_text.strip()
+    # Short filler text (< 40 chars) combined with a URL = spam
+    return len(plain_text) < 40
+
+
+def is_suspicious_message(msg) -> bool:
+    """Check if a message should be proactively scanned for spam."""
+    if msg.forward_origin is not None:
+        return True
+    if has_urls(msg):
+        return True
     return False
 
 
@@ -212,6 +237,19 @@ async def handle_new_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if len(message_cache) > MAX_CACHE_SIZE:
         message_cache.popitem(last=False)
+
+    # Rule-based: short filler text + URL = instant ban (no LLM needed)
+    if is_short_text_with_link(msg):
+        logger.info(f"Short text + link detected in message {msg.message_id} — banning immediately")
+        checked_message_ids.add(key)
+        await handle_spam_action(
+            chat_id=msg.chat.id,
+            message_id=msg.message_id,
+            user_id=msg.from_user.id,
+            context=context,
+            ban_user=True,
+        )
+        return
 
     # Proactive scan for suspicious messages (forwarded or containing links)
     if is_suspicious_message(msg):
