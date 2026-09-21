@@ -51,6 +51,8 @@ EXAMPLE_SPAM = [
     "Спасибо!! [ссылка на VPN/прокси сервис]",
     "Помогло, спасибо большое! [ссылка на VPN/прокси сервис]",
     "🔥 ПОЧТИ 4 ЛЯМА ЗАЛЕТЕЛО, КРУТЬ!😎 ИГРАЮ👉 coinik.is-best.net",
+    "Нужен человек выполнить небольшую задачу, вознаграждение 7000 рублей. Кому интересно — пишите",
+    "Ищу того, кто сможет сделать работу за 150$, детали в личке",
 ]
 
 # --- Core Functionalities ---
@@ -120,7 +122,8 @@ def build_prompt(message_text: str, context: dict = None) -> str:
         f"- Forwarded messages from unknown channels promoting products or services\n"
         f"- Messages with URLs to suspicious or promotional domains\n"
         f"- Any mention of cryptocurrency, tokens, blockchain, mining, NFT, DeFi, Web3, airdrops, or crypto earnings\n"
-        f"- Any mention of casinos, gambling, betting, slots, poker, roulette, or betting platforms (1xbet, mostbet, pin-up, 1win, melbet, fonbet, etc.)\n\n"
+        f"- Any mention of casinos, gambling, betting, slots, poker, roulette, or betting platforms (1xbet, mostbet, pin-up, 1win, melbet, fonbet, etc.)\n"
+        f"- Offers to do some task or job with a specific reward amount mentioned (e.g., 'сделать работу за 5000 рублей', 'вознаграждение 100$') — this is *always* spam\n\n"
         f"{context_section}"
         f"Determine whether the following message is spam:\n\"{message_text}\"\n\n"
         f"Reply with a single word: YES if it is spam, or NO if it is not."
@@ -129,7 +132,9 @@ def build_prompt(message_text: str, context: dict = None) -> str:
 async def call_chatgpt(prompt: str) -> str:
     try:
         response = await client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.6-luna",
+            # reasoning model: disable reasoning tokens, answer is a single YES/NO word
+            reasoning_effort="none",
             messages=[{"role": "user", "content": prompt}]
         )
         return response.choices[0].message.content.strip()

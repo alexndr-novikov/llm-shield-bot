@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Telegram anti-spam bot that combines community moderation (💩 emoji reactions) with LLM-based spam detection (OpenAI gpt-4o-mini). Single-file Python application (`bot.py`).
+Telegram anti-spam bot that combines community moderation (💩 emoji reactions) with LLM-based spam detection (OpenAI gpt-5.6-luna). Single-file Python application (`bot.py`).
 
 ## Commands
 
@@ -42,3 +42,7 @@ Everything lives in `bot.py`. The bot uses long-polling (not webhooks).
 **Handlers registered:**
 - `MessageHandler(filters.TEXT | filters.CAPTION)` → `handle_new_message`
 - `MessageReactionHandler` → `handle_reaction`
+
+## Git Conventions
+
+- Do NOT add `Co-Authored-By` lines to commit messages.
