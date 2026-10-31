@@ -17,15 +17,16 @@ No test suite or linter is configured.
 
 ## Environment Variables
 
-Defined in `.env` (see `.env.sample`): `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`.
+Defined in `.env` (see `.env.sample`): `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, optional `TYPESAFE_API_KEY` (enables the Jev shadow classifier).
 
 ## Architecture
 
 Everything lives in `bot.py`. The bot uses long-polling (not webhooks).
 
-**Two moderation paths:**
+**Moderation paths:**
 1. **Community path:** When a message accumulates 4+ 💩 reactions, it is deleted (user is NOT banned). Admin is notified for review.
 2. **LLM path:** On the first 💩 reaction to a message, the bot sends the message text to GPT with a spam-detection prompt. If GPT says "YES", the message is deleted AND the user is banned.
+3. **Jev shadow path (optional):** If `TYPESAFE_API_KEY` is set, Jev (TypeSafe System One, `Noul` question) is queried in parallel with GPT. It never affects the decision. When Jev's verdict (probability >= `JEV_SPAM_THRESHOLD`) differs from GPT's, `notify_jev_disagreement()` posts both verdicts to the chat.
 
 **In-memory caches (OrderedDict, no persistence):**
 - `message_cache` (max 100) — stores recent messages so reaction handlers can look up the original text.
@@ -35,6 +36,8 @@ Everything lives in `bot.py`. The bot uses long-polling (not webhooks).
 **Key functions:**
 - `build_prompt()` — constructs the spam-detection prompt with hardcoded Russian-language spam examples.
 - `call_chatgpt()` — async OpenAI API call; defaults to "NO" on error.
+- `call_jev()` — async Jev call returning spam probability (0..1) or None if unconfigured/failed.
+- `SPAM_TRAITS` / `EXAMPLE_SPAM` — shared by both the GPT prompt and the Jev question.
 - `handle_new_message()` — caches every text/caption message.
 - `handle_reaction()` — core logic: updates reaction counts, triggers LLM check or community removal.
 - `handle_spam_action()` — deletes message and optionally bans user.

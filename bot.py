@@ -1,9 +1,11 @@
+import asyncio
 import logging
 import os
 from dotenv import load_dotenv
 from collections import OrderedDict
 
 from openai import AsyncOpenAI
+from typesafe_sdk import AsyncTypeSafeClient, Noul
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -18,8 +20,13 @@ load_dotenv()
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+TYPESAFE_API_KEY = os.getenv("TYPESAFE_API_KEY")
 
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+# Jev (TypeSafe) runs in shadow mode: it classifies every message alongside OpenAI,
+# but decisions are still made by OpenAI. Disagreements are reported to the chat.
+jev_client = AsyncTypeSafeClient(api_key=TYPESAFE_API_KEY, model="jev-latest") if TYPESAFE_API_KEY else None
+JEV_SPAM_THRESHOLD = 0.5  # Noul probability at or above which Jev's verdict counts as "spam"
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -53,6 +60,24 @@ EXAMPLE_SPAM = [
     "🔥 ПОЧТИ 4 ЛЯМА ЗАЛЕТЕЛО, КРУТЬ!😎 ИГРАЮ👉 coinik.is-best.net",
     "Нужен человек выполнить небольшую задачу, вознаграждение 7000 рублей. Кому интересно — пишите",
     "Ищу того, кто сможет сделать работу за 150$, детали в личке",
+]
+
+SPAM_TRAITS = [
+    "Promises of high income with little to no effort",
+    "Vague job offers or business opportunities",
+    "Encouragement to message privately (e.g., 'пишите в лс', 'пиши в личные сообщения')",
+    "References to cryptocurrency or earnings in USD/RUB",
+    "Excessive use of emojis or exclamation marks",
+    "Artificial urgency (e.g., 'только сегодня', 'осталось 2 места')",
+    "More than 12 emojis is *always* spam",
+    "Short innocent-looking messages (e.g., 'Спасибо!!', 'Помогло!') that contain promotional links or link previews to VPN, proxy, or other services",
+    "VPN, proxy, or free service promotions",
+    "Casino, gambling, or betting promotions (e.g., fake winnings screenshots, links to gambling sites)",
+    "Forwarded messages from unknown channels promoting products or services",
+    "Messages with URLs to suspicious or promotional domains",
+    "Any mention of cryptocurrency, tokens, blockchain, mining, NFT, DeFi, Web3, airdrops, or crypto earnings",
+    "Any mention of casinos, gambling, betting, slots, poker, roulette, or betting platforms (1xbet, mostbet, pin-up, 1win, melbet, fonbet, etc.)",
+    "Offers to do some task or job with a specific reward amount mentioned (e.g., 'сделать работу за 5000 рублей', 'вознаграждение 100$') — this is *always* spam",
 ]
 
 # --- Core Functionalities ---
@@ -91,39 +116,32 @@ def extract_message_context(msg) -> dict:
     }
 
 
-def build_prompt(message_text: str, context: dict = None) -> str:
-    examples = "\n".join(f"- {ex}" for ex in EXAMPLE_SPAM)
-
-    context_section = ""
+def context_parts(context: dict = None) -> list:
+    """Human-readable extra facts about a message (URLs, forward origin)."""
+    parts = []
     if context:
-        parts = []
         if context.get("urls"):
             parts.append(f"URLs in message: {', '.join(context['urls'])}")
         if context.get("is_forwarded"):
             parts.append(f"Message is {context.get('forward_info', 'forwarded from another source')}")
-        if parts:
-            context_section = f"\nAdditional context about this message:\n" + "\n".join(f"- {p}" for p in parts) + "\n"
+    return parts
+
+
+def build_prompt(message_text: str, context: dict = None) -> str:
+    examples = "\n".join(f"- {ex}" for ex in EXAMPLE_SPAM)
+    traits = "\n".join(f"- {t}" for t in SPAM_TRAITS)
+
+    context_section = ""
+    parts = context_parts(context)
+    if parts:
+        context_section = f"\nAdditional context about this message:\n" + "\n".join(f"- {p}" for p in parts) + "\n"
 
     return (
         f"You are a Telegram group moderation bot trained to detect and filter spam messages.\n"
         f"The following messages are real examples of spam banned from the group:\n"
         f"{examples}\n\n"
         f"Spam in this group typically includes messages with one or more of the following traits:\n"
-        f"- Promises of high income with little to no effort\n"
-        f"- Vague job offers or business opportunities\n"
-        f"- Encouragement to message privately (e.g., 'пишите в лс', 'пиши в личные сообщения')\n"
-        f"- References to cryptocurrency or earnings in USD/RUB\n"
-        f"- Excessive use of emojis or exclamation marks\n"
-        f"- Artificial urgency (e.g., 'только сегодня', 'осталось 2 места')\n"
-        f"- More than 12 emojis is *always* spam\n"
-        f"- Short innocent-looking messages (e.g., 'Спасибо!!', 'Помогло!') that contain promotional links or link previews to VPN, proxy, or other services\n"
-        f"- VPN, proxy, or free service promotions\n"
-        f"- Casino, gambling, or betting promotions (e.g., fake winnings screenshots, links to gambling sites)\n"
-        f"- Forwarded messages from unknown channels promoting products or services\n"
-        f"- Messages with URLs to suspicious or promotional domains\n"
-        f"- Any mention of cryptocurrency, tokens, blockchain, mining, NFT, DeFi, Web3, airdrops, or crypto earnings\n"
-        f"- Any mention of casinos, gambling, betting, slots, poker, roulette, or betting platforms (1xbet, mostbet, pin-up, 1win, melbet, fonbet, etc.)\n"
-        f"- Offers to do some task or job with a specific reward amount mentioned (e.g., 'сделать работу за 5000 рублей', 'вознаграждение 100$') — this is *always* spam\n\n"
+        f"{traits}\n\n"
         f"{context_section}"
         f"Determine whether the following message is spam:\n\"{message_text}\"\n\n"
         f"Reply with a single word: YES if it is spam, or NO if it is not."
@@ -141,6 +159,35 @@ async def call_chatgpt(prompt: str) -> str:
     except Exception as e:
         logger.error(f"ChatGPT API call failed: {e}")
         return "NO"
+
+
+async def call_jev(message_text: str, context: dict = None):
+    """Ask Jev (TypeSafe System One) for the probability that the message is spam.
+
+    Returns a float in [0, 1], or None when Jev is not configured or the call failed.
+    Shadow mode only: the result never affects moderation decisions.
+    """
+    if jev_client is None:
+        return None
+    try:
+        question = Noul(
+            instructions={
+                "question": "Is this Telegram group message spam that should be removed and its author banned?",
+                "context": "The group is a Russian-speaking Telegram community. Spam in this group typically has one or more of these traits.",
+                "spam_traits": SPAM_TRAITS,
+                "real_spam_examples_banned_from_the_group": EXAMPLE_SPAM,
+                "additional_facts_about_this_message": context_parts(context),
+            },
+            criteria={
+                "true": "The message is spam: unsolicited advertising, job/earnings scams, crypto, gambling, VPN promotion, or a paid-task offer.",
+                "false": "The message is a legitimate contribution to the group conversation.",
+            },
+        )
+        response = await jev_client.system_one(state=message_text, questions={"spam": question})
+        return float(response.nouls["spam"].noul)
+    except Exception as e:
+        logger.error(f"Jev API call failed: {e}")
+        return None
 
 def update_reaction_count(chat_id: int, message_id: int, old_reactions: list, new_reactions: list):
     """Update reaction counts based on changes"""
@@ -176,11 +223,6 @@ def update_reaction_count(chat_id: int, message_id: int, old_reactions: list, ne
         reaction_cache.popitem(last=False)
     
     return reaction_cache[key]["💩"]
-
-def get_reaction_count(chat_id: int, message_id: int, emoji: str) -> int:
-    """Get current reaction count for a specific emoji"""
-    key = (chat_id, message_id)
-    return reaction_cache.get(key, {}).get(emoji, 0)
 
 async def handle_join_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Auto-delete the default 'user joined the group' service messages."""
@@ -231,15 +273,6 @@ def is_short_text_with_link(msg) -> bool:
     return len(plain_text) < 40
 
 
-def is_suspicious_message(msg) -> bool:
-    """Check if a message should be proactively scanned for spam."""
-    if msg.forward_origin is not None:
-        return True
-    if has_urls(msg):
-        return True
-    return False
-
-
 async def handle_new_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not msg:
@@ -267,6 +300,31 @@ async def notify_admin_about_removal(chat_id: int, poop_count: int, context: Con
         
     except Exception as e:
         logger.error(f"Failed to notify admin: {e}")
+
+async def notify_jev_disagreement(chat_id: int, message_id: int, gpt_result: str, jev_prob: float,
+                                   message_text: str, message_deleted: bool, context: ContextTypes.DEFAULT_TYPE):
+    """Shadow mode: report to the chat when Jev's verdict differs from OpenAI's."""
+    try:
+        gpt_is_spam = gpt_result.lower().startswith("yes")
+        gpt_verdict = "спам (сообщение удалено, пользователь забанен)" if gpt_is_spam else "не спам"
+        jev_verdict = "спам" if jev_prob >= JEV_SPAM_THRESHOLD else "не спам"
+        snippet = message_text.replace("\n", " ").strip()
+        if len(snippet) > 120:
+            snippet = snippet[:120] + "…"
+        text = (
+            f"⚖️ Jev не согласен с вердиктом OpenAI по сообщению {message_id}.\n"
+            f"OpenAI: {gpt_verdict}\n"
+            f"Jev: {jev_verdict} (вероятность спама {jev_prob:.2f})\n"
+            f"Текст: «{snippet}»"
+        )
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_to_message_id=None if message_deleted else message_id,
+        )
+    except Exception as e:
+        logger.error(f"Failed to notify about Jev disagreement: {e}")
+
 
 async def handle_spam_action(chat_id: int, message_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE, ban_user: bool = True, notify_admin: bool = False, original_message=None, poop_count: int = 0):
     try:
@@ -310,32 +368,7 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"Message {reaction.message_id} now has {total_poop_count} 💩 reactions")
 
-    # Debug: dump full message structure on first 💩 reaction
     original_message = message_cache.get(key)
-    if original_message and key not in checked_message_ids:
-        msg = original_message
-        logger.info(f"=== DEBUG MESSAGE DUMP for {reaction.message_id} ===")
-        logger.info(f"  text: {repr(msg.text)}")
-        logger.info(f"  caption: {repr(msg.caption)}")
-        logger.info(f"  from_user: id={msg.from_user.id}, username={msg.from_user.username}, first_name={msg.from_user.first_name}")
-        logger.info(f"  chat: id={msg.chat.id}, title={msg.chat.title}")
-        logger.info(f"  date: {msg.date}")
-        logger.info(f"  forward_origin: {msg.forward_origin}")
-        logger.info(f"  entities: {[(e.type, e.offset, e.length, e.url) for e in (msg.entities or [])]}")
-        logger.info(f"  caption_entities: {[(e.type, e.offset, e.length, e.url) for e in (msg.caption_entities or [])]}")
-        logger.info(f"  link_preview_options: {msg.link_preview_options if hasattr(msg, 'link_preview_options') else 'N/A'}")
-        logger.info(f"  photo: {bool(msg.photo)}")
-        logger.info(f"  video: {bool(msg.video)}")
-        logger.info(f"  document: {bool(msg.document)}")
-        logger.info(f"  sticker: {bool(msg.sticker)}")
-        logger.info(f"  reply_markup: {msg.reply_markup}")
-        logger.info(f"  has_urls(): {has_urls(msg)}")
-        logger.info(f"  is_short_text_with_link(): {is_short_text_with_link(msg)}")
-        logger.info(f"  forward_origin is not None: {msg.forward_origin is not None}")
-        logger.info(f"  has_external_reply(): {has_external_reply(msg)}")
-        logger.info(f"  external_reply: {getattr(msg, 'external_reply', None)}")
-        logger.info(f"  full to_dict: {msg.to_dict()}")
-        logger.info(f"=== END DEBUG DUMP ===")
 
     # Forwarded, external reply (channel quote), or short text + link: ban immediately on first 💩
     if original_message and (original_message.forward_origin is not None or has_external_reply(original_message) or is_short_text_with_link(original_message)):
@@ -352,7 +385,6 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Check if we've reached the threshold
     if total_poop_count >= 4:
-        original_message = message_cache.get(key)
         if not original_message:
             logger.warning("Original message not found in cache.")
             return
@@ -373,17 +405,21 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     checked_message_ids.add(key)
-    original_message = message_cache.get(key)
     if not original_message:
         logger.warning("Original message not found in cache.")
         return
 
     msg_context = extract_message_context(original_message)
     prompt = build_prompt(msg_context["text"], msg_context)
-    result = await call_chatgpt(prompt)
-    logger.info(f"GPT result: {result}")
+    # OpenAI decides; Jev runs in parallel as a shadow classifier.
+    result, jev_prob = await asyncio.gather(
+        call_chatgpt(prompt),
+        call_jev(msg_context["text"], msg_context),
+    )
+    logger.info(f"GPT result: {result}; Jev spam probability: {jev_prob}")
 
-    if result.lower().startswith("yes"):
+    gpt_is_spam = result.lower().startswith("yes")
+    if gpt_is_spam:
         user_id = original_message.from_user.id
         await handle_spam_action(
             chat_id=reaction.chat.id,
@@ -391,6 +427,17 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_id=user_id,
             context=context,
             ban_user=True  # Ban user when AI detects spam
+        )
+
+    if jev_prob is not None and (jev_prob >= JEV_SPAM_THRESHOLD) != gpt_is_spam:
+        await notify_jev_disagreement(
+            chat_id=reaction.chat.id,
+            message_id=reaction.message_id,
+            gpt_result=result,
+            jev_prob=jev_prob,
+            message_text=msg_context["text"],
+            message_deleted=gpt_is_spam,
+            context=context,
         )
 
 # --- Bot Initialization ---

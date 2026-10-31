@@ -7,6 +7,7 @@ This is a Telegram bot that helps keep chats clean by combining community modera
 - 💩 A single 💩 reaction triggers a spam check on the message
 - ⚡ Instant delete + ban (no LLM call) for obvious spam patterns: forwarded messages, channel quotes (external reply), and short filler text with a link
 - 🧠 Other flagged messages are analyzed by OpenAI (`gpt-5.6-luna`) against known spam patterns — confirmed spam is deleted and the sender is banned
+- ⚖️ Optional shadow classifier: Jev (TypeSafe) evaluates the same message in parallel. Decisions are still made by OpenAI; when Jev disagrees, the bot posts a short notice to the chat so the verdicts can be compared
 - 🤝 Community fallback: **4+ 💩 reactions** delete the message without banning, and the admin is notified for review
 - 🧹 Auto-deletes "user joined the group" service messages
 - 🗃 Keeps in-memory caches of recent messages and reaction counts (no persistence)
@@ -33,6 +34,8 @@ Copy `.env.sample` or create a new one with the following:
 ```
 TELEGRAM_BOT_TOKEN=your-telegram-token
 OPENAI_API_KEY=your-openai-api-key
+# Optional — enables the Jev shadow classifier
+TYPESAFE_API_KEY=your-typesafe-api-key
 ```
 
 ### 4. Run the bot
@@ -47,6 +50,7 @@ python bot.py
 - On the **first** 💩 reaction:
   - Forwarded message, channel quote, or short text + link ➜ deleted and sender banned immediately.
   - Otherwise the message text is sent to GPT with a spam-detection prompt built from real spam examples. If GPT replies "YES" ➜ message deleted, sender banned.
+  - If `TYPESAFE_API_KEY` is set, Jev is asked the same question in parallel (shadow mode). Its answer never changes the decision; if it disagrees with GPT, a notice with both verdicts and Jev's spam probability is posted to the chat.
 - If a message accumulates **4+ 💩 reactions** ➜ it is deleted (sender is *not* banned) and the admin is pinged to review.
 - Messages posted before the bot (re)started can't be LLM-checked — the cache is in-memory only.
 
